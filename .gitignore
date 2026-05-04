@@ -1,0 +1,16 @@
+# Environment
+.env
+
+# Database (contains server IPs and RCON passwords)
+data/
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
