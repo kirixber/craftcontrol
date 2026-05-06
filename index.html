@@ -630,7 +630,6 @@
     /* ── Terminal ── */
     .terminal-wrap {
       margin-top: 3rem;
-      perspective: 1000px;
     }
     .terminal {
       background: rgba(10,10,10,0.95);
@@ -638,8 +637,6 @@
       border-radius: 16px;
       overflow: hidden;
       box-shadow: 0 40px 80px rgba(0,0,0,0.5);
-      transform-style: preserve-3d;
-      transition: transform 0.3s;
     }
     .terminal-bar {
       background: rgba(255,255,255,0.03);
@@ -852,6 +849,57 @@
     }
     footer a { color: var(--green-dim); text-decoration: none; transition: color 0.2s; }
     footer a:hover { color: var(--green); }
+
+    /* ── Magnifier ── */
+    .magnifier {
+      position: fixed;
+      width: 170px;
+      height: 170px;
+      pointer-events: none;
+      opacity: 0;
+      transform: scale(0.5);
+      transition: opacity 0.25s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 9999;
+    }
+    .magnifier.active {
+      opacity: 1;
+      transform: scale(1);
+    }
+    .magnifier-lens {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      border: 3px solid var(--green);
+      background: var(--bg-elev);
+      overflow: hidden;
+      -webkit-mask-image: -webkit-radial-gradient(white, black);
+      mask-image: radial-gradient(white, black);
+      box-shadow:
+        0 0 0 2px rgba(0,0,0,0.9),
+        0 30px 70px rgba(0,0,0,0.8),
+        0 0 60px var(--green-glow),
+        inset 0 0 50px rgba(0,0,0,0.5);
+    }
+    .magnifier-content {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform-origin: top left;
+      will-change: transform;
+    }
+    .magnifier-content > * {
+      margin: 0 !important;
+      transform: none !important;
+    }
+    .terminal:hover {
+      cursor: none;
+    }
+    body.magnifying .cursor-dot,
+    body.magnifying .cursor-ring,
+    body.magnifying .cursor-glow {
+      opacity: 0 !important;
+    }
 
     /* ── Responsive ── */
     @media (max-width: 900px) {
@@ -1074,7 +1122,7 @@
       <h2 class="section-title">Works right out of the box</h2>
     </div>
     <div class="terminal-wrap reveal">
-      <div class="terminal" data-tilt>
+      <div class="terminal">
         <div class="terminal-bar">
           <div class="td td-red"></div>
           <div class="td td-yellow"></div>
@@ -1096,6 +1144,11 @@
           <div class="typewriter-line"><span class="t-success">🎵 Playing `pigstep` in <strong>General VC</strong></span></div>
           <div class="typewriter-line"><span class="t-dim">// Bot leaves after 5 min of inactivity • *stop to disconnect</span></div>
         </div>
+      </div>
+    </div>
+    <div class="magnifier" id="magnifier">
+      <div class="magnifier-lens">
+        <div class="magnifier-content" id="magnifierContent"></div>
       </div>
     </div>
   </section>
@@ -1590,6 +1643,72 @@
 
     // Init slider position
     setSlider(slider.getBoundingClientRect().left + slider.getBoundingClientRect().width / 2);
+
+    // ── Terminal Magnifier ──
+    const terminal = document.querySelector('.terminal');
+    const magnifier = document.getElementById('magnifier');
+    const magnifierContent = document.getElementById('magnifierContent');
+    const lensSize = 170;
+    const zoomScale = 2.5;
+    let targetMagX = 0, targetMagY = 0, currentMagX = 0, currentMagY = 0;
+    let isOverTerminal = false;
+    let terminalClone = null;
+
+    function buildClone() {
+      if (terminalClone) terminalClone.remove();
+      terminalClone = terminal.cloneNode(true);
+      terminalClone.style.width = terminal.offsetWidth + 'px';
+      terminalClone.style.maxWidth = 'none';
+      terminalClone.style.position = 'relative';
+      terminalClone.style.transform = 'none';
+      terminalClone.style.transition = 'none';
+      terminalClone.style.boxShadow = 'none';
+      terminalClone.style.border = 'none';
+      terminalClone.style.borderRadius = '0';
+      terminalClone.querySelectorAll('.typewriter-line').forEach(line => {
+        line.style.opacity = '1';
+        line.style.transform = 'none';
+      });
+      magnifierContent.innerHTML = '';
+      magnifierContent.appendChild(terminalClone);
+    }
+
+    if (terminal && magnifier) {
+      terminal.addEventListener('mouseenter', () => {
+        isOverTerminal = true;
+        buildClone();
+        magnifier.classList.add('active');
+        document.body.classList.add('magnifying');
+      });
+
+      terminal.addEventListener('mouseleave', () => {
+        isOverTerminal = false;
+        magnifier.classList.remove('active');
+        document.body.classList.remove('magnifying');
+      });
+
+      terminal.addEventListener('mousemove', (e) => {
+        const rect = terminal.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        targetMagX = e.clientX - lensSize / 2;
+        targetMagY = e.clientY - lensSize / 2;
+        const offsetX = -x * zoomScale + lensSize / 2;
+        const offsetY = -y * zoomScale + lensSize / 2;
+        magnifierContent.style.transform = `translate3d(${offsetX}px, ${offsetY}px, 0) scale(${zoomScale})`;
+      });
+
+      function animateMagnifier() {
+        if (isOverTerminal) {
+          currentMagX += (targetMagX - currentMagX) * 0.15;
+          currentMagY += (targetMagY - currentMagY) * 0.15;
+          magnifier.style.left = currentMagX + 'px';
+          magnifier.style.top = currentMagY + 'px';
+        }
+        requestAnimationFrame(animateMagnifier);
+      }
+      animateMagnifier();
+    }
   </script>
 </body>
 </html>
