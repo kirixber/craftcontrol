@@ -1,13 +1,23 @@
-const { EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { resolveServer } = require('../utils/resolveServer');
 
 module.exports = {
   name: 'ip',
   aliases: [],
   description: 'Show server connection info',
+  data: new SlashCommandBuilder()
+    .setName('ip')
+    .setDescription('Show server connection info')
+    .addStringOption(option =>
+      option.setName('server')
+        .setDescription('The server name (optional)')
+        .setRequired(false)),
 
-  async execute(message, args) {
-    const server = await resolveServer(message, args, 0);
+  async execute(context, args) {
+    const isInteraction = !!context.isChatInputCommand?.();
+    const finalArgs = isInteraction ? [context.options.getString('server')] : args;
+
+    const server = await resolveServer(context, finalArgs, 0);
     if (!server) return;
 
     const embed = new EmbedBuilder()
@@ -25,7 +35,12 @@ module.exports = {
       embed.addFields({ name: '🎮 Version', value: server.version, inline: true });
     }
 
-    embed.setFooter({ text: 'Use *status to check if the server is online' });
-    message.channel.send({ embeds: [embed] });
+    embed.setFooter({ text: 'Use /status to check if the server is online' });
+
+    if (isInteraction) {
+      await context.reply({ embeds: [embed] });
+    } else {
+      context.channel.send({ embeds: [embed] });
+    }
   }
 };

@@ -1,4 +1,4 @@
-const { EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 
 function toWikiTitle(query) {
   return query.split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join('_');
@@ -37,13 +37,29 @@ module.exports = {
   name: 'wiki',
   aliases: ['w'],
   description: 'Search the Minecraft Wiki',
+  data: new SlashCommandBuilder()
+    .setName('wiki')
+    .setDescription('Search the Minecraft Wiki')
+    .addStringOption(option =>
+      option.setName('query')
+        .setDescription('The search term')
+        .setRequired(true)),
 
-  async execute(message, args) {
-    if (!args.length)
-      return message.reply('❌ Usage: `*wiki <query>`\nExample: `*wiki silk touch`');
+  async execute(context, args) {
+    const isInteraction = !!context.isChatInputCommand?.();
+    const query = isInteraction ? context.options.getString('query') : args.join(' ');
 
-    const query = args.join(' ');
-    const searching = await message.channel.send(`🔍 Searching wiki for **${query}**...`);
+    if (!query) {
+      const msg = '❌ Usage: `*wiki <query>`\nExample: `*wiki silk touch`';
+      return isInteraction ? context.reply({ content: msg, ephemeral: true }) : context.reply(msg);
+    }
+
+    if (isInteraction) await context.deferReply();
+
+    let searching;
+    if (!isInteraction) {
+      searching = await context.channel.send(`🔍 Searching wiki for **${query}**...`);
+    }
 
     try {
       // First try direct title lookup (most accurate)
@@ -54,14 +70,18 @@ module.exports = {
       if (!info) {
         const results = await searchWiki(query);
         if (!results.length) {
-          await searching.delete();
-          return message.reply(`❓ No wiki results found for **${query}**. Try a more specific term.`);
+          const noResults = `❓ No wiki results found for **${query}**. Try a more specific term.`;
+          if (isInteraction) return context.editReply(noResults);
+          if (searching) await searching.delete();
+          return context.reply(noResults);
         }
         info = await getPageInfo(results[0].title);
 
         if (!info) {
-          await searching.delete();
-          return message.reply(`❓ Couldn't load the wiki page for **${query}**.`);
+          const loadError = `❓ Couldn't load the wiki page for **${query}**.`;
+          if (isInteraction) return context.editReply(loadError);
+          if (searching) await searching.delete();
+          return context.reply(loadError);
         }
 
         // Show other results as suggestions if we used search
@@ -72,8 +92,6 @@ module.exports = {
           info.related = others;
         }
       }
-
-      await searching.delete();
 
       const embed = new EmbedBuilder()
         .setTitle(`📖 ${info.title}`)
@@ -86,13 +104,24 @@ module.exports = {
         embed.addFields({ name: '🔎 Related pages', value: info.related.join(' • ') });
       }
 
-      embed.setFooter({ text: 'minecraft.wiki • Use *recipe <item> for crafting recipes' });
-      message.channel.send({ embeds: [embed] });
+      embed.setFooter({ text: 'minecraft.wiki • Use /recipe <item> for crafting recipes' });
+      
+      if (isInteraction) {
+        await context.editReply({ content: null, embeds: [embed] });
+      } else {
+        if (searching) await searching.delete();
+        context.channel.send({ embeds: [embed] });
+      }
 
     } catch (err) {
-      try { await searching.delete(); } catch {}
       console.error('Wiki error:', err);
-      message.reply('⚠️ Something went wrong. Try again later.');
+      const errMsg = '⚠️ Something went wrong. Try again later.';
+      if (isInteraction) {
+        await context.editReply(errMsg);
+      } else {
+        if (searching) try { await searching.delete(); } catch {}
+        context.reply(errMsg);
+      }
     }
   }
 };

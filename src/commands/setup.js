@@ -1,22 +1,37 @@
 const { getDb, save, getServers } = require('../db/database');
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, SlashCommandBuilder } = require('discord.js');
+const { canManageSMP } = require('../utils/permissions');
 
 module.exports = {
   name: 'setup',
   aliases: [],
   description: 'Add or update a server config (admin only)',
+  data: new SlashCommandBuilder()
+    .setName('setup')
+    .setDescription('Add or update a server config (admin only)'),
 
-  async execute(message) {
-    if (!message.member.permissions.has('Administrator'))
-      return message.reply('❌ You need Administrator permissions to run setup.');
+  async execute(context) {
+    const isInteraction = !!context.isChatInputCommand?.();
+    const member = context.member;
 
-    const filter = m => m.author.id === message.author.id;
+    if (!await canManageSMP(member)) {
+      const msg = '❌ You need SMP Manager permissions to run setup.';
+      return isInteraction ? context.reply({ content: msg, ephemeral: true }) : context.reply(msg);
+    }
+
+    if (isInteraction) await context.deferReply();
+
+    const filter = m => m.author.id === (isInteraction ? context.user.id : context.author.id);
     const opts = { filter, max: 1, time: 30000 };
 
     const ask = async (prompt) => {
-      await message.channel.send(prompt);
+      if (isInteraction) {
+        await context.followUp(prompt);
+      } else {
+        await context.channel.send(prompt);
+      }
       try {
-        const collected = await message.channel.awaitMessages(opts);
+        const collected = await context.channel.awaitMessages(opts);
         const response = collected.first().content.trim();
         return response.toLowerCase() === 'skip' ? null : response;
       } catch {
@@ -24,18 +39,26 @@ module.exports = {
       }
     };
 
-    const existing = await getServers(message.guild.id);
+    const existing = getServers(context.guild.id);
     if (existing.length > 0) {
-      await message.channel.send(
-        `ℹ️ You already have ${existing.length} server(s): ${existing.map(s => `\`${s.server_name}\``).join(', ')}\n` +
-        `To edit an existing server use \`*edit <server name>\` instead.`
-      );
+      const infoMsg = `ℹ️ You already have ${existing.length} server(s): ${existing.map(s => `\`${s.server_name}\``).join(', ')}\nTo edit an existing server use \`${isInteraction ? '/edit server:<name>' : '*edit <server name>'}\` instead.`;
+      if (isInteraction) await context.editReply(infoMsg);
+      else await context.channel.send(infoMsg);
     }
 
-    await message.channel.send('🛠️ **SMP Bot Setup**\nType `skip` to leave any optional field empty.\n');
+    const startMsg = '🛠️ **SMP Bot Setup**\nType `skip` to leave any optional field empty.\n';
+    if (isInteraction) {
+      if (context.replied) await context.followUp(startMsg);
+      else await context.editReply(startMsg);
+    } else {
+      await context.channel.send(startMsg);
+    }
 
     const serverName = await ask('📛 **Server name?** (used in commands like `*status <n>`)');
-    if (!serverName) return message.channel.send('❌ Setup cancelled — server name is required.');
+    if (!serverName) {
+      const cancelMsg = '❌ Setup cancelled — server name is required.';
+      return isInteraction ? context.followUp(cancelMsg) : context.channel.send(cancelMsg);
+    }
 
     const javaIp = await ask('☕ **Java Edition IP?** (the public IP players use to connect, or `skip`)');
     let javaPort = '25565';
@@ -53,8 +76,12 @@ module.exports = {
 
     const version = await ask('🎮 **Minecraft version?** (e.g. `1.21.1`, or `skip`)');
 
+    const managerRole = await ask('🛡️ **SMP Manager Role ID?** (Users with this role can manage plugins and server settings, or `skip`)');
+
     // RCON setup
-    await message.channel.send('🔧 **RCON Setup** *(optional — enables live player list, in-game commands and more)*\nType `skip` to skip. Need help? Run `*rconguide` after setup.');
+    const rconStartMsg = '🔧 **RCON Setup** *(optional — enables live player list, in-game commands and more)*\nType `skip` to skip. Need help? Run `*rconguide` after setup.';
+    if (isInteraction) await context.followUp(rconStartMsg);
+    else await context.channel.send(rconStartMsg);
 
     const rconHostRaw = await ask(
       `🖥️ **RCON host?**\n` +
@@ -80,20 +107,20 @@ module.exports = {
       rconPassword = await ask('🔑 **RCON password?** (from `server.properties`, or `skip` to disable RCON)');
     }
 
-    const db = await getDb();
-    db.run(
-      `INSERT INTO servers (guild_id, server_name, java_ip, java_port, bedrock_ip, bedrock_port, version, rcon_host, rcon_port, rcon_password)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    const db = getDb();
+    db.prepare(
+      `INSERT INTO servers (guild_id, server_name, java_ip, java_port, bedrock_ip, bedrock_port, version, rcon_host, rcon_port, rcon_password, manager_role_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(guild_id, server_name) DO UPDATE SET
          java_ip=excluded.java_ip, java_port=excluded.java_port,
          bedrock_ip=excluded.bedrock_ip, bedrock_port=excluded.bedrock_port,
          version=excluded.version,
-         rcon_host=excluded.rcon_host, rcon_port=excluded.rcon_port, rcon_password=excluded.rcon_password`,
-      [message.guild.id, serverName, javaIp, javaPort, bedrockIp, bedrockPort, version, rconHost, rconPort, rconPassword]
-    );
+         rcon_host=excluded.rcon_host, rcon_port=excluded.rcon_port, rcon_password=excluded.rcon_password,
+         manager_role_id=excluded.manager_role_id`
+    ).run(context.guild.id, serverName, javaIp, javaPort, bedrockIp, bedrockPort, version, rconHost, rconPort, rconPassword, managerRole);
     save();
 
-    const allServers = await getServers(message.guild.id);
+    const allServers = getServers(context.guild.id);
 
     const embed = new EmbedBuilder()
       .setTitle(`✅ ${serverName} configured!`)
@@ -113,6 +140,10 @@ module.exports = {
       )
       .setFooter({ text: allServers.length > 1 ? 'Use *ip <n>, *status <n> to target a specific server' : 'Only one server — no need to specify name in commands!' });
 
-    message.channel.send({ embeds: [embed] });
+    if (isInteraction) {
+      await context.followUp({ embeds: [embed] });
+    } else {
+      context.channel.send({ embeds: [embed] });
+    }
   }
 };

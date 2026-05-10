@@ -1,73 +1,36 @@
-# 🎮 SMP Bot
+# ⬡ CraftControl
+### The Ultimate Minecraft Discord Bot for SMP Servers
 
-A Discord bot for Minecraft SMP servers. Manage server IPs, check status, and save shared coordinates — all from Discord.
+**CraftControl** is a feature-rich Discord bot designed specifically for Minecraft SMP communities. It bridges the gap between your Discord server and your Minecraft world, providing real-time data, moderation tools, and community organization.
 
-Works across multiple servers. Each Discord server gets its own isolated data.
-
----
-
-## Setup
-
-### 1. Clone & install
-```bash
-git clone <your-repo>
-cd smp-bot
-npm install
-```
-
-### 2. Create your bot
-- Go to https://discord.com/developers/applications
-- New Application → Bot → Add Bot
-- Copy the **Token**
-- Under **Privileged Gateway Intents**, enable **Message Content Intent**
-- Under **OAuth2 → URL Generator**, select `bot` with these permissions:
-  - Send Messages, Embed Links, Read Message History, Manage Messages
-
-### 3. Configure
-```bash
-cp .env.example .env
-# Edit .env and paste your token
-```
-
-### 4. Run
-```bash
-node index.js
-```
-
-### 5. Optional: Run as a systemd service (Linux)
-```ini
-[Unit]
-Description=SMP Discord Bot
-After=network.target
-
-[Service]
-WorkingDirectory=/path/to/smp-bot
-ExecStart=/usr/bin/node index.js
-Restart=always
-EnvironmentFile=/path/to/smp-bot/.env
-
-[Install]
-WantedBy=multi-user.target
-```
+[**Add to Discord**](https://discord.com/oauth2/authorize?client_id=1490560537917128856&permissions=274881300544&scope=bot+applications.commands) | [**Visit Website**](https://kirixber.github.io/craftcontrol/)
 
 ---
 
-## Commands
+## ✨ Key Features
 
-| Command | Description |
-|---|---|
-| `!setup` | Set up the bot for your server (admin only) |
-| `!ip` | Show server connection info |
-| `!status` | Check if server is online |
-| `!coords list` | View all saved waypoints |
-| `!coords add <n> <x> <y> <z> [dim]` | Save a location |
-| `!coords delete <n>` | Delete a waypoint |
-| `!help` | Show all commands |
-
-**Dimensions:** `overworld` (default), `nether`, `end`
+*   📡 **Live Server Status:** Monitor uptime, player counts, and detailed network stats (ping, jitter, packet loss).
+*   📍 **Coordinate Sharing:** Save, list, and search for community waypoints across Overworld, Nether, and End.
+*   ⚡ **RCON Integration:** Execute in-game commands (kick, ban, whitelist, teleport) directly from Discord chat.
+*   🎵 **Minecraft Music:** Play in-game sounds and music discs in your Voice Channels.
+*   📚 **In-Game Wiki & Recipes:** Quick access to crafting recipes and Minecraft Wiki information.
+*   🛡️ **SMP Manager Permissions:** Delegate bot management to staff without requiring full Discord Administrator rights.
 
 ---
 
-## Data
+## 🚀 Getting Started
 
-All data is stored in `data/smp.db` (SQLite). Back this file up to preserve your coords.
+1.  **Invite the Bot:** Use the [Invite Link](https://discord.com/oauth2/authorize?client_id=1490560537917128856&permissions=274881300544&scope=bot+applications.commands) to add CraftControl to your server.
+2.  **Run Setup:** Type `/setup` in any channel. The bot will guide you through connecting your Minecraft server.
+3.  **Configure RCON:** Use `/rconguide` to learn how to enable RCON on your hosting provider for advanced features.
+
+---
+
+## 🔗 Links
+
+*   **Website:** [Landing Page](https://kirixber.github.io/craftcontrol/)
+*   **Support:** [Top.gg Page](https://top.gg)
+*   **Developer:** Created by [kirixber](https://github.com/kirixber)
+
+---
+*CraftControl is not affiliated with Mojang or Microsoft.*

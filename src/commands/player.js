@@ -1,15 +1,24 @@
-const { EmbedBuilder } = require('discord.js');
-const { rconCommand, getRconConfig } = require('../utils/rcon');
+const { EmbedBuilder, SlashCommandBuilder } = require('discord.js');
+const { rconCommand } = require('../utils/rcon');
+const { getServer } = require('../db/database');
 
 module.exports = {
   name: 'player',
   description: 'Look up a Minecraft player by IGN',
+  data: new SlashCommandBuilder()
+    .setName('player')
+    .setDescription('Look up a Minecraft player by IGN')
+    .addStringOption(opt => opt.setName('ign').setDescription('Minecraft username').setRequired(true)),
 
-  async execute(message, args) {
-    if (!args[0]) return message.reply('❌ Usage: `\'player <username>`');
+  async execute(context, args) {
+    const isInteraction = !!context.isChatInputCommand?.();
+    const ign = isInteraction ? context.options.getString('ign') : args[0];
 
-    const ign = args[0];
-    const checking = await message.channel.send(`🔍 Looking up **${ign}**...`);
+    if (!ign) return context.reply('❌ Usage: `*player <username>`');
+
+    if (isInteraction) await context.deferReply();
+    const reply = async (content) => isInteraction ? context.editReply(content) : context.channel.send(content);
+    const checking = await reply(`🔍 Looking up **${ign}**...`);
 
     try {
       // Step 1: Try Mojang API (works for Java/premium accounts)
@@ -27,10 +36,10 @@ module.exports = {
 
         // Step 2: Check if currently online via RCON
         let onlineStatus = '❓ Unknown';
-        const rconConfig = await getRconConfig(message.guild.id);
-        if (rconConfig) {
+        const server = getServer(context.guild.id); // Default server
+        if (server && server !== 'multiple' && server.rcon_host) {
           try {
-            const listRes = await rconCommand(message.guild.id, 'list');
+            const listRes = await rconCommand(server, 'list');
             const playerList = listRes.split(':')[1] || '';
             const isOnline = playerList.split(',').map(p => p.trim().toLowerCase()).includes(name.toLowerCase());
             onlineStatus = isOnline ? '🟢 Online' : '⚫ Offline';
@@ -52,18 +61,22 @@ module.exports = {
           )
           .setFooter({ text: 'Skin powered by Crafatar • Data from Mojang API' });
 
-        await checking.delete();
-        return message.channel.send({ embeds: [embed] });
+        if (isInteraction) {
+          await context.editReply({ content: null, embeds: [embed] });
+        } else {
+          await checking.delete().catch(() => {});
+          await context.channel.send({ embeds: [embed] });
+        }
+        return;
       }
 
       // Step 3: Not found on Mojang — could be cracked
-      // Check if they're online via RCON
-      const rconConfig = await getRconConfig(message.guild.id);
+      const server = getServer(context.guild.id);
       let onlineStatus = '❓ Unknown';
 
-      if (rconConfig) {
+      if (server && server !== 'multiple' && server.rcon_host) {
         try {
-          const listRes = await rconCommand(message.guild.id, 'list');
+          const listRes = await rconCommand(server, 'list');
           const playerList = listRes.split(':')[1] || '';
           const isOnline = playerList.split(',').map(p => p.trim().toLowerCase()).includes(ign.toLowerCase());
           onlineStatus = isOnline ? '🟢 Online' : '⚫ Offline';
@@ -84,13 +97,21 @@ module.exports = {
         )
         .setFooter({ text: 'This player was not found on Mojang — likely a cracked account' });
 
-      await checking.delete();
-      message.channel.send({ embeds: [embed] });
+      if (isInteraction) {
+        await context.editReply({ content: null, embeds: [embed] });
+      } else {
+        await checking.delete().catch(() => {});
+        await context.channel.send({ embeds: [embed] });
+      }
 
     } catch (err) {
-      await checking.delete();
+      if (isInteraction) {
+        await context.editReply('⚠️ Something went wrong fetching player data. Try again later.');
+      } else {
+        await checking.delete().catch(() => {});
+        await context.reply('⚠️ Something went wrong fetching player data. Try again later.');
+      }
       console.error('Player lookup error:', err);
-      message.reply('⚠️ Something went wrong fetching player data. Try again later.');
     }
   }
 };

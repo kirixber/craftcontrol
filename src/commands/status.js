@@ -1,4 +1,4 @@
-const { EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { resolveServer } = require('../utils/resolveServer');
 const mcping = require('mcping-js');
 
@@ -36,15 +36,33 @@ module.exports = {
   name: 'status',
   aliases: [],
   description: 'Check if the server is online',
+  data: new SlashCommandBuilder()
+    .setName('status')
+    .setDescription('Check if the server is online')
+    .addStringOption(option =>
+      option.setName('server')
+        .setDescription('The server name (optional)')
+        .setRequired(false)),
 
-  async execute(message, args) {
-    const server = await resolveServer(message, args, 0);
+  async execute(context, args) {
+    const isInteraction = !!context.isChatInputCommand?.();
+    const finalArgs = isInteraction ? [context.options.getString('server')] : args;
+
+    if (isInteraction) await context.deferReply();
+
+    const server = await resolveServer(context, finalArgs, 0);
     if (!server) return;
 
-    if (!server.java_ip && !server.bedrock_ip)
-      return message.reply('❌ No IP configured for this server. Run `*setup` again.');
+    if (!server.java_ip && !server.bedrock_ip) {
+      const msg = '❌ No IP configured for this server. Run `*setup` again.';
+      return isInteraction ? context.editReply(msg) : context.reply(msg);
+    }
 
-    const checking = await message.channel.send(`🔄 Pinging **${server.server_name}**...`);
+    let checking;
+    if (!isInteraction) {
+      checking = await context.channel.send(`🔄 Pinging **${server.server_name}**...`);
+    }
+
     const embed = new EmbedBuilder()
       .setTitle(`📡 ${server.server_name} — Status`)
       .setTimestamp();
@@ -74,7 +92,12 @@ module.exports = {
     }
 
     embed.setColor(anyOnline ? 0x44ff88 : 0xff4444);
-    await checking.delete();
-    message.channel.send({ embeds: [embed] });
+    
+    if (isInteraction) {
+      await context.editReply({ content: null, embeds: [embed] });
+    } else {
+      await checking.delete();
+      context.channel.send({ embeds: [embed] });
+    }
   }
 };

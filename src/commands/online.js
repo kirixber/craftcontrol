@@ -1,4 +1,4 @@
-const { EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { rconCommand } = require('../utils/rcon');
 const { resolveServer } = require('../utils/resolveServer');
 
@@ -6,23 +6,43 @@ module.exports = {
   name: 'online',
   aliases: [],
   description: 'Shows who is currently online on the server',
+  data: new SlashCommandBuilder()
+    .setName('online')
+    .setDescription('Shows who is currently online on the server')
+    .addStringOption(option =>
+      option.setName('server')
+        .setDescription('The server name (optional)')
+        .setRequired(false)),
 
-  async execute(message, args) {
-    const server = await resolveServer(message, args, 0);
+  async execute(context, args) {
+    const isInteraction = !!context.isChatInputCommand?.();
+    const finalArgs = isInteraction ? [context.options.getString('server')] : args;
+
+    if (isInteraction) await context.deferReply();
+
+    const server = await resolveServer(context, finalArgs, 0);
     if (!server) return;
 
-    if (!server.rcon_host || !server.rcon_password)
-      return message.reply('❌ RCON is not configured for this server. Re-run `*setup` and provide RCON details.');
+    if (!server.rcon_host || !server.rcon_password) {
+      const msg = '❌ RCON is not configured for this server. Re-run `*setup` and provide RCON details.';
+      return isInteraction ? context.editReply(msg) : context.reply(msg);
+    }
 
-    const checking = await message.channel.send(`🔄 Fetching players on **${server.server_name}**...`);
+    let checking;
+    if (!isInteraction) {
+      checking = await context.channel.send(`🔄 Fetching players on **${server.server_name}**...`);
+    }
 
     try {
       const response = await rconCommand(server, 'list');
       const match = response.match(/There are (\d+) of a max of (\d+) players online[:\.]?\s*(.*)/i);
 
-      await checking.delete();
-
-      if (!match) return message.channel.send('⚠️ Couldn\'t parse server response: `' + response + '`');
+      if (!match) {
+        const errorMsg = '⚠️ Couldn\'t parse server response: `' + response + '`';
+        if (isInteraction) return context.editReply(errorMsg);
+        if (checking) await checking.delete();
+        return context.channel.send(errorMsg);
+      }
 
       const [, online, max, playerList] = match;
       const players = playerList.trim() ? playerList.trim().split(', ') : [];
@@ -34,10 +54,20 @@ module.exports = {
         .setFooter({ text: `${online}/${max} players online` })
         .setTimestamp();
 
-      message.channel.send({ embeds: [embed] });
+      if (isInteraction) {
+        await context.editReply({ content: null, embeds: [embed] });
+      } else {
+        if (checking) await checking.delete();
+        context.channel.send({ embeds: [embed] });
+      }
     } catch (err) {
-      await checking.delete();
-      message.reply('⚠️ Could not connect via RCON. Make sure the server is online and RCON is enabled.');
+      const errorMsg = '⚠️ Could not connect via RCON. Make sure the server is online and RCON is enabled.';
+      if (isInteraction) {
+        await context.editReply(errorMsg);
+      } else {
+        if (checking) await checking.delete();
+        context.reply(errorMsg);
+      }
     }
   }
 };

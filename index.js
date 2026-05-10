@@ -59,12 +59,23 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-// Slash command handler (for /help — needed for verified badge)
+// Slash command handler
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName === 'help') {
-    const helpCmd = client.commands.get('help');
-    if (helpCmd) await helpCmd.execute(interaction, []);
+
+  const command = client.commands.get(interaction.commandName);
+  if (!command) return;
+
+  try {
+    await command.execute(interaction, []);
+  } catch (err) {
+    console.error(`Error in slash command ${interaction.commandName}:`, err);
+    const msg = '⚠️ Something went wrong running that command.';
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({ content: msg, ephemeral: true });
+    } else {
+      await interaction.reply({ content: msg, ephemeral: true });
+    }
   }
 });
 

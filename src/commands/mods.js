@@ -1,44 +1,80 @@
-const { EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { getDb, save } = require('../db/database');
 const { resolveServer } = require('../utils/resolveServer');
+const { canManageSMP } = require('../utils/permissions');
 
 module.exports = {
   name: 'mods',
   aliases: ['plugins', 'modlist'],
   description: 'View or manage client-side mods for the server',
+  data: new SlashCommandBuilder()
+    .setName('mods')
+    .setDescription('View or manage client-side mods for the server')
+    .addSubcommand(sub =>
+      sub.setName('list')
+        .setDescription('View all client-side mods')
+        .addStringOption(opt => opt.setName('server').setDescription('The server name')))
+    .addSubcommand(sub =>
+      sub.setName('add')
+        .setDescription('Add a mod (admin)')
+        .addStringOption(opt => opt.setName('name').setDescription('Mod name').setRequired(true))
+        .addStringOption(opt => opt.setName('description').setDescription('Mod description'))
+        .addStringOption(opt => opt.setName('url').setDescription('Download URL'))
+        .addBooleanOption(opt => opt.setName('required').setDescription('Whether the mod is required'))
+        .addStringOption(opt => opt.setName('server').setDescription('The server name')))
+    .addSubcommand(sub =>
+      sub.setName('remove')
+        .setDescription('Remove a mod (admin)')
+        .addStringOption(opt => opt.setName('name').setDescription('Mod name').setRequired(true))
+        .addStringOption(opt => opt.setName('server').setDescription('The server name')))
+    .addSubcommand(sub =>
+      sub.setName('delete')
+        .setDescription('Remove a mod (alias for remove)')
+        .addStringOption(opt => opt.setName('name').setDescription('Mod name').setRequired(true))
+        .addStringOption(opt => opt.setName('server').setDescription('The server name'))),
 
-  async execute(message, args) {
-    const sub = args[0]?.toLowerCase();
+  async execute(context, args) {
+    const isInteraction = !!context.isChatInputCommand?.();
+    let sub;
 
-    if (!sub || sub === 'list') return listMods(message, args.slice(1));
-    if (sub === 'add') return addMod(message, args.slice(1));
-    if (sub === 'remove' || sub === 'delete') return removeMod(message, args.slice(1));
+    if (isInteraction) {
+      sub = context.options.getSubcommand();
+      await context.deferReply();
+    } else {
+      sub = args[0]?.toLowerCase();
+    }
 
-    message.reply([
+    if (!sub || sub === 'list') return listMods(context, isInteraction ? [] : args.slice(1));
+    if (sub === 'add') return addMod(context, isInteraction ? [] : args.slice(1));
+    if (sub === 'remove' || sub === 'delete') return removeMod(context, isInteraction ? [] : args.slice(1));
+
+    const helpMsg = [
       '❓ Usage:',
       '`*mods list [server]` — View all client-side mods',
       '`*mods add <name> | <description> | <download_url> | [required/optional] [server]` — Add a mod *(admin)*',
       '`*mods remove <name> [server]` — Remove a mod *(admin)*',
-    ].join('\n'));
+    ].join('\n');
+
+    if (isInteraction) return context.editReply(helpMsg);
+    return context.reply(helpMsg);
   }
 };
 
-async function listMods(message, args) {
-  const server = await resolveServer(message, args, 0);
+async function listMods(context, args) {
+  const isInteraction = !!context.isChatInputCommand?.();
+  const serverArg = isInteraction ? context.options.getString('server') : args[0];
+  const server = await resolveServer(context, serverArg ? [serverArg] : [], 0);
   if (!server) return;
 
-  const db = await getDb();
-  const result = db.exec(
-    `SELECT * FROM mods WHERE guild_id = ? AND server_name = ? ORDER BY required DESC, mod_name ASC`,
-    [message.guild.id, server.server_name]
-  );
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT * FROM mods WHERE guild_id = ? AND server_name = ? ORDER BY required DESC, mod_name ASC`
+  ).all(context.guild.id, server.server_name);
 
-  if (!result.length || !result[0].values.length) {
-    return message.reply(`📭 No mods listed for **${server.server_name}** yet.\nAdmins can use \`*mods add\` to add one.`);
+  if (!rows.length) {
+    const msg = `📭 No mods listed for **${server.server_name}** yet.\nAdmins can use \`*mods add\` to add one.`;
+    return isInteraction ? context.editReply(msg) : context.reply(msg);
   }
-
-  const cols = result[0].columns;
-  const rows = result[0].values.map(v => Object.fromEntries(cols.map((c, i) => [c, v[i]])));
 
   const required = rows.filter(r => r.required);
   const optional = rows.filter(r => !r.required);
@@ -73,54 +109,72 @@ async function listMods(message, args) {
   }
 
   embed.setFooter({ text: `${rows.length} mod(s) listed • Added by server admins` });
-  message.channel.send({ embeds: [embed] });
+  
+  if (isInteraction) {
+    await context.editReply({ embeds: [embed] });
+  } else {
+    context.channel.send({ embeds: [embed] });
+  }
 }
 
-async function addMod(message, args) {
-  if (!message.member.permissions.has('Administrator'))
-    return message.reply('❌ You need Administrator permissions to add mods.');
+async function addMod(context, args) {
+  const isInteraction = !!context.isChatInputCommand?.();
+  let modName, description, downloadUrl, required, serverName;
 
-  // Format: *mods add Name | Description | URL | required/optional [server]
-  const fullInput = args.join(' ');
-  const parts = fullInput.split('|').map(s => s.trim());
+  if (isInteraction) {
+    modName = context.options.getString('name');
+    description = context.options.getString('description') || null;
+    downloadUrl = context.options.getString('url') || null;
+    required = context.options.getBoolean('required') ? 1 : 0;
+    serverName = context.options.getString('server');
+  } else {
+    const fullInput = args.join(' ');
+    const parts = fullInput.split('|').map(s => s.trim());
 
-  if (parts.length < 1 || !parts[0]) {
-    return message.reply([
-      '❌ Usage: `*mods add <name> | <description> | <download_url> | [required/optional] [server]`',
-      'Example: `*mods add Sodium | Performance mod | https://modrinth.com/mod/sodium | optional`',
-      'Description, URL and required/optional are all optional fields.',
-    ].join('\n'));
+    if (parts.length < 1 || !parts[0]) {
+      return context.reply([
+        '❌ Usage: `*mods add <name> | <description> | <download_url> | [required/optional] [server]`',
+        'Example: `*mods add Sodium | Performance mod | https://modrinth.com/mod/sodium | optional`',
+        'Description, URL and required/optional are all optional fields.',
+      ].join('\n'));
+    }
+
+    modName = parts[0];
+    description = parts[1] || null;
+    downloadUrl = parts[2] || null;
+    const lastPart = parts[3]?.toLowerCase() || '';
+    required = lastPart.includes('required') ? 1 : 0;
+
+    serverName = (!lastPart || lastPart.includes('required') || lastPart.includes('optional'))
+      ? parts[4] || null
+      : parts[3] || null;
   }
 
-  const modName = parts[0];
-  const description = parts[1] || null;
-  const downloadUrl = parts[2] || null;
-  const lastPart = parts[3]?.toLowerCase() || '';
-  const required = lastPart.includes('required') ? 1 : 0;
-
-  // Server name might be last arg if not part of pipe format
-  const serverArg = (!lastPart || lastPart.includes('required') || lastPart.includes('optional'))
-    ? parts[4] || null
-    : parts[3] || null;
-
-  const server = await resolveServer(message, serverArg ? [serverArg] : [], 0);
+  const server = await resolveServer(context, serverName ? [serverName] : [], 0);
   if (!server) return;
 
-  const db = await getDb();
+  const member = isInteraction ? context.member : context.member;
+  if (!await canManageSMP(member, server.server_name)) {
+    const msg = '❌ You need SMP Manager permissions to add mods.';
+    return isInteraction ? context.editReply(msg) : context.reply(msg);
+  }
 
-  // Check duplicate
-  const existing = db.exec(
-    `SELECT id FROM mods WHERE guild_id = ? AND server_name = ? AND LOWER(mod_name) = LOWER(?)`,
-    [message.guild.id, server.server_name, modName]
-  );
-  if (existing.length && existing[0].values.length)
-    return message.reply(`❌ **${modName}** is already in the mod list for **${server.server_name}**.`);
+  const db = getDb();
+  const existing = db.prepare(
+    `SELECT id FROM mods WHERE guild_id = ? AND server_name = ? AND LOWER(mod_name) = LOWER(?)`
+  ).get(context.guild.id, server.server_name, modName);
 
-  db.run(
+  if (existing) {
+    const msg = `❌ **${modName}** is already in the mod list for **${server.server_name}**.`;
+    return isInteraction ? context.editReply(msg) : context.reply(msg);
+  }
+
+  const author = isInteraction ? context.user : context.author;
+
+  db.prepare(
     `INSERT INTO mods (guild_id, server_name, mod_name, description, download_url, required, added_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [message.guild.id, server.server_name, modName, description, downloadUrl, required, message.author.username]
-  );
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(context.guild.id, server.server_name, modName, description, downloadUrl, required, author.username);
   save();
 
   const embed = new EmbedBuilder()
@@ -132,36 +186,53 @@ async function addMod(message, args) {
       `📌 ${required ? '🔴 Required' : '🟡 Optional'}`,
     ].filter(Boolean).join('\n'));
 
-  message.channel.send({ embeds: [embed] });
+  if (isInteraction) {
+    await context.editReply({ embeds: [embed] });
+  } else {
+    context.channel.send({ embeds: [embed] });
+  }
 }
 
-async function removeMod(message, args) {
-  if (!message.member.permissions.has('Administrator'))
-    return message.reply('❌ You need Administrator permissions to remove mods.');
+async function removeMod(context, args) {
+  const isInteraction = !!context.isChatInputCommand?.();
+  let modName, serverName;
 
-  if (!args.length)
-    return message.reply('❌ Usage: `*mods remove <mod name> [server]`');
+  if (isInteraction) {
+    modName = context.options.getString('name');
+    serverName = context.options.getString('server');
+  } else {
+    if (!args.length)
+      return context.reply('❌ Usage: `*mods remove <mod name> [server]`');
+    serverName = args[args.length - 1];
+    modName = args.slice(0, -1).join(' ') || args[0];
+  }
 
-  // Last arg might be server name
-  const server = await resolveServer(message, args.slice(-1), 0);
+  const server = await resolveServer(context, serverName ? [serverName] : [], 0);
   if (!server) return;
 
-  const modName = args.slice(0, -1).join(' ') || args[0];
-  const db = await getDb();
+  const member = isInteraction ? context.member : context.member;
+  if (!await canManageSMP(member, server.server_name)) {
+    const msg = '❌ You need SMP Manager permissions to remove mods.';
+    return isInteraction ? context.editReply(msg) : context.reply(msg);
+  }
 
-  const existing = db.exec(
-    `SELECT id FROM mods WHERE guild_id = ? AND server_name = ? AND LOWER(mod_name) = LOWER(?)`,
-    [message.guild.id, server.server_name, modName]
-  );
+  const db = getDb();
+  const actualModName = isInteraction ? modName : (args.length > 1 ? args.slice(0, -1).join(' ') : args[0]);
 
-  if (!existing.length || !existing[0].values.length)
-    return message.reply(`❌ No mod named **${modName}** found in **${server.server_name}**.`);
+  const existing = db.prepare(
+    `SELECT id FROM mods WHERE guild_id = ? AND server_name = ? AND LOWER(mod_name) = LOWER(?)`
+  ).get(context.guild.id, server.server_name, actualModName);
 
-  db.run(
-    `DELETE FROM mods WHERE guild_id = ? AND server_name = ? AND LOWER(mod_name) = LOWER(?)`,
-    [message.guild.id, server.server_name, modName]
-  );
+  if (!existing) {
+    const msg = `❌ No mod named **${actualModName}** found in **${server.server_name}**.`;
+    return isInteraction ? context.editReply(msg) : context.reply(msg);
+  }
+
+  db.prepare(
+    `DELETE FROM mods WHERE guild_id = ? AND server_name = ? AND LOWER(mod_name) = LOWER(?)`
+  ).run(context.guild.id, server.server_name, actualModName);
   save();
 
-  message.reply(`🗑️ Removed **${modName}** from **${server.server_name}**.`);
+  const successMsg = `🗑️ Removed **${actualModName}** from **${server.server_name}**.`;
+  return isInteraction ? context.editReply(successMsg) : context.reply(successMsg);
 }

@@ -1,4 +1,4 @@
-const initSqlJs = require('sql.js');
+const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
 
@@ -6,20 +6,20 @@ const DB_PATH = path.join(__dirname, '../../data/smp.db');
 
 let db;
 
-async function getDb() {
+function getDb() {
   if (db) return db;
 
-  const SQL = await initSqlJs();
-
-  if (fs.existsSync(DB_PATH)) {
-    const fileBuffer = fs.readFileSync(DB_PATH);
-    db = new SQL.Database(fileBuffer);
-  } else {
-    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-    db = new SQL.Database();
+  const dataDir = path.dirname(DB_PATH);
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
   }
 
-  db.run(`
+  db = new Database(DB_PATH);
+  
+  // Basic optimization
+  db.pragma('journal_mode = WAL');
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS servers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       guild_id TEXT NOT NULL,
@@ -33,14 +33,21 @@ async function getDb() {
       rcon_port TEXT DEFAULT '25575',
       rcon_password TEXT,
       local_ip TEXT,
+      manager_role_id TEXT,
       UNIQUE(guild_id, server_name)
     )
   `);
 
-  // Migrate existing DBs
-  try { db.run(`ALTER TABLE servers ADD COLUMN local_ip TEXT`); } catch {}
+  // Migrations
+  const tableInfo = db.prepare("PRAGMA table_info(servers)").all();
+  if (!tableInfo.some(col => col.name === 'local_ip')) {
+    db.exec("ALTER TABLE servers ADD COLUMN local_ip TEXT");
+  }
+  if (!tableInfo.some(col => col.name === 'manager_role_id')) {
+    db.exec("ALTER TABLE servers ADD COLUMN manager_role_id TEXT");
+  }
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS coords (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       guild_id TEXT NOT NULL,
@@ -55,7 +62,7 @@ async function getDb() {
     )
   `);
 
-  db.run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS mods (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       guild_id TEXT NOT NULL,
@@ -68,38 +75,31 @@ async function getDb() {
     )
   `);
 
-  save();
   return db;
 }
 
+// Compatibility/Helper functions
 function save() {
-  if (!db) return;
-  const data = db.export();
-  fs.writeFileSync(DB_PATH, Buffer.from(data));
+  // better-sqlite3 saves automatically
+  return;
 }
 
-async function getServers(guildId) {
-  const db = await getDb();
-  const result = db.exec(`SELECT * FROM servers WHERE guild_id = ?`, [guildId]);
-  if (!result.length || !result[0].values.length) return [];
-  const cols = result[0].columns;
-  return result[0].values.map(v => Object.fromEntries(cols.map((c, i) => [c, v[i]])));
+function getServers(guildId) {
+  const db = getDb();
+  return db.prepare(`SELECT * FROM servers WHERE guild_id = ?`).all(guildId);
 }
 
-async function getServer(guildId, serverName = null) {
-  const db = await getDb();
+function getServer(guildId, serverName = null) {
+  const db = getDb();
 
   if (serverName) {
-    const result = db.exec(
-      `SELECT * FROM servers WHERE guild_id = ? AND LOWER(server_name) = LOWER(?)`,
-      [guildId, serverName]
-    );
-    if (!result.length || !result[0].values.length) return null;
-    const cols = result[0].columns;
-    return Object.fromEntries(cols.map((c, i) => [c, result[0].values[0][i]]));
+    const server = db.prepare(
+      `SELECT * FROM servers WHERE guild_id = ? AND LOWER(server_name) = LOWER(?)`
+    ).get(guildId, serverName);
+    return server || null;
   }
 
-  const servers = await getServers(guildId);
+  const servers = getServers(guildId);
   if (servers.length === 1) return servers[0];
   if (servers.length === 0) return null;
   return 'multiple';

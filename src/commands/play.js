@@ -7,7 +7,7 @@ const {
   getVoiceConnection,
   entersState,
 } = require('@discordjs/voice');
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, SlashCommandBuilder } = require('discord.js');
 
 const BASE = 'https://raw.githubusercontent.com/kirixber/mc-sounds/refs/heads/master/';
 
@@ -112,8 +112,6 @@ const CATEGORIES = {
   '🧱 Blocks & Other':    ['bell','amethyst','chest_open','chest_close','anvil','beacon','sculk','conduit','portal','fire','enchant','hud'],
 };
 
-module.exports = { SOUNDS, CATEGORIES };
-
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const idleTimers = new Map();
 
@@ -139,79 +137,114 @@ function findSound(query) {
   return Object.keys(SOUNDS).find(k => k.includes(q) || q.includes(k)) || null;
 }
 
-module.exports.execute = async function(message, args) {
-  if (!args.length)
-    return message.reply('❌ Usage: `*play <sound>`\nUse `*sounds` to see all available sounds.');
+module.exports = {
+  name: 'play',
+  aliases: ['p'],
+  description: 'Play a Minecraft sound in your voice channel',
+  SOUNDS,
+  CATEGORIES,
+  data: new SlashCommandBuilder()
+    .setName('play')
+    .setDescription('Play a Minecraft sound in your voice channel')
+    .addStringOption(option =>
+      option.setName('sound')
+        .setDescription('The sound to play')
+        .setRequired(true)),
 
-  const query = args.join(' ');
-  const soundKey = findSound(query);
+  async execute(context, args) {
+    const isInteraction = !!context.isChatInputCommand?.();
+    const query = isInteraction ? context.options.getString('sound') : args.join(' ');
 
-  if (!soundKey) {
-    const suggestions = Object.keys(SOUNDS)
-      .filter(k => args.some(a => k.includes(a.toLowerCase())))
-      .slice(0, 4);
-    const hint = suggestions.length ? `\nDid you mean: ${suggestions.map(s => `\`${s}\``).join(', ')}` : '';
-    return message.reply(`❓ Sound **${query}** not found.${hint}\nUse \`*sounds\` to browse all sounds.`);
-  }
-
-  const voiceChannel = message.member?.voice?.channel;
-  if (!voiceChannel)
-    return message.reply('❌ You need to be in a voice channel first!');
-
-  const perms = voiceChannel.permissionsFor(message.client.user);
-  if (!perms.has('Connect') || !perms.has('Speak'))
-    return message.reply('❌ I don\'t have permission to join or speak in that voice channel.');
-
-  const soundUrl = BASE + SOUNDS[soundKey];
-
-  try {
-    let connection = getVoiceConnection(message.guild.id);
-    if (!connection) {
-      connection = joinVoiceChannel({
-        channelId: voiceChannel.id,
-        guildId: message.guild.id,
-        adapterCreator: message.guild.voiceAdapterCreator,
-      });
-
-      connection.on(VoiceConnectionStatus.Disconnected, async () => {
-        try {
-          await Promise.race([
-            entersState(connection, VoiceConnectionStatus.Signalling, 5000),
-            entersState(connection, VoiceConnectionStatus.Connecting, 5000),
-          ]);
-        } catch {
-          connection.destroy();
-          clearIdleTimer(message.guild.id);
-        }
-      });
+    if (!query) {
+      const msg = '❌ Usage: `*play <sound>`\nUse `*sounds` to see all available sounds.';
+      return isInteraction ? context.reply({ content: msg, ephemeral: true }) : context.reply(msg);
     }
 
-    const player = createAudioPlayer();
-    const resource = createAudioResource(soundUrl);
-    connection.subscribe(player);
-    player.play(resource);
-    clearIdleTimer(message.guild.id);
+    const soundKey = findSound(query);
 
-    const embed = new EmbedBuilder()
-      .setDescription(`🎵 Playing \`${soundKey}\` in **${voiceChannel.name}**`)
-      .setColor(0x5865F2)
-      .setFooter({ text: 'Bot leaves after 5 min of inactivity • *stop to disconnect' });
+    if (!soundKey) {
+      const suggestions = Object.keys(SOUNDS)
+        .filter(k => query.toLowerCase().split(' ').some(a => k.includes(a)))
+        .slice(0, 4);
+      const hint = suggestions.length ? `\nDid you mean: ${suggestions.map(s => `\`${s}\``).join(', ')}` : '';
+      const msg = `❓ Sound **${query}** not found.${hint}\nUse \`*sounds\` to browse all sounds.`;
+      return isInteraction ? context.reply({ content: msg, ephemeral: true }) : context.reply(msg);
+    }
 
-    message.channel.send({ embeds: [embed] });
+    const member = isInteraction ? context.member : context.member;
+    const voiceChannel = member?.voice?.channel;
+    if (!voiceChannel) {
+      const msg = '❌ You need to be in a voice channel first!';
+      return isInteraction ? context.reply({ content: msg, ephemeral: true }) : context.reply(msg);
+    }
 
-    player.on(AudioPlayerStatus.Idle, () => resetIdleTimer(message.guild.id, connection));
-    player.on('error', err => {
-      console.error('Audio error:', err.message, soundUrl);
-      message.channel.send(`⚠️ Couldn't play \`${soundKey}\`. The file path may be slightly different — let the dev know!`);
-      resetIdleTimer(message.guild.id, connection);
-    });
+    const perms = voiceChannel.permissionsFor(context.client.user);
+    if (!perms.has('Connect') || !perms.has('Speak')) {
+      const msg = '❌ I don\'t have permission to join or speak in that voice channel.';
+      return isInteraction ? context.reply({ content: msg, ephemeral: true }) : context.reply(msg);
+    }
 
-  } catch (err) {
-    console.error('Voice error:', err);
-    message.reply('⚠️ Something went wrong joining the voice channel.');
+    const soundUrl = BASE + SOUNDS[soundKey];
+
+    try {
+      if (isInteraction) await context.deferReply();
+
+      let connection = getVoiceConnection(context.guild.id);
+      if (!connection) {
+        connection = joinVoiceChannel({
+          channelId: voiceChannel.id,
+          guildId: context.guild.id,
+          adapterCreator: context.guild.voiceAdapterCreator,
+        });
+
+        connection.on(VoiceConnectionStatus.Disconnected, async () => {
+          try {
+            await Promise.race([
+              entersState(connection, VoiceConnectionStatus.Signalling, 5000),
+              entersState(connection, VoiceConnectionStatus.Connecting, 5000),
+            ]);
+          } catch {
+            connection.destroy();
+            clearIdleTimer(context.guild.id);
+          }
+        });
+      }
+
+      const player = createAudioPlayer();
+      const resource = createAudioResource(soundUrl);
+      connection.subscribe(player);
+      player.play(resource);
+      clearIdleTimer(context.guild.id);
+
+      const embed = new EmbedBuilder()
+        .setDescription(`🎵 Playing \`${soundKey}\` in **${voiceChannel.name}**`)
+        .setColor(0x5865F2)
+        .setFooter({ text: 'Bot leaves after 5 min of inactivity • *stop to disconnect' });
+
+      if (isInteraction) {
+        await context.editReply({ embeds: [embed] });
+      } else {
+        context.channel.send({ embeds: [embed] });
+      }
+
+      player.on(AudioPlayerStatus.Idle, () => resetIdleTimer(context.guild.id, connection));
+      player.on('error', err => {
+        console.error('Audio error:', err.message, soundUrl);
+        const msg = `⚠️ Couldn't play \`${soundKey}\`. The file path may be slightly different — let the dev know!`;
+        if (isInteraction) context.followUp({ content: msg, ephemeral: true });
+        else context.channel.send(msg);
+        resetIdleTimer(context.guild.id, connection);
+      });
+
+    } catch (err) {
+      console.error('Voice error:', err);
+      const msg = '⚠️ Something went wrong joining the voice channel.';
+      if (isInteraction) {
+        if (context.deferred) await context.editReply(msg);
+        else await context.reply({ content: msg, ephemeral: true });
+      } else {
+        context.reply(msg);
+      }
+    }
   }
 };
-
-module.exports.name = 'play';
-module.exports.aliases = ['p'];
-module.exports.description = 'Play a Minecraft sound in your voice channel';

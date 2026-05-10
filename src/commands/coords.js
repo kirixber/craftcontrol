@@ -1,6 +1,7 @@
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { getDb, save } = require('../db/database');
 const { resolveServer } = require('../utils/resolveServer');
-const { EmbedBuilder } = require('discord.js');
+const { canManageSMP } = require('../utils/permissions');
 
 const DIMENSIONS = ['overworld', 'nether', 'end'];
 const DIMENSION_EMOJI = { overworld: '🌿', nether: '🔥', end: '🌌' };
@@ -9,37 +10,77 @@ module.exports = {
   name: 'coords',
   aliases: ['c'],
   description: 'Manage shared SMP coordinates',
+  data: new SlashCommandBuilder()
+    .setName('coords')
+    .setDescription('Manage shared SMP coordinates')
+    .addSubcommand(sub =>
+      sub.setName('list')
+        .setDescription('List all saved coordinates')
+        .addStringOption(opt => opt.setName('server').setDescription('The server name')))
+    .addSubcommand(sub =>
+      sub.setName('add')
+        .setDescription('Add a new coordinate')
+        .addStringOption(opt => opt.setName('name').setDescription('Name of the location').setRequired(true))
+        .addIntegerOption(opt => opt.setName('x').setDescription('X coordinate').setRequired(true))
+        .addIntegerOption(opt => opt.setName('y').setDescription('Y coordinate').setRequired(true))
+        .addIntegerOption(opt => opt.setName('z').setDescription('Z coordinate').setRequired(true))
+        .addStringOption(opt => opt.setName('dimension').setDescription('The dimension').addChoices(
+          { name: 'Overworld', value: 'overworld' },
+          { name: 'Nether', value: 'nether' },
+          { name: 'End', value: 'end' }
+        ))
+        .addStringOption(opt => opt.setName('server').setDescription('The server name')))
+    .addSubcommand(sub =>
+      sub.setName('delete')
+        .setDescription('Delete a saved coordinate')
+        .addStringOption(opt => opt.setName('name').setDescription('Name of the location').setRequired(true))
+        .addStringOption(opt => opt.setName('server').setDescription('The server name')))
+    .addSubcommand(sub =>
+      sub.setName('remove')
+        .setDescription('Delete a saved coordinate (alias for delete)')
+        .addStringOption(opt => opt.setName('name').setDescription('Name of the location').setRequired(true))
+        .addStringOption(opt => opt.setName('server').setDescription('The server name'))),
 
-  async execute(message, args) {
-    const sub = args[0]?.toLowerCase();
-    if (!sub || sub === 'list') return listCoords(message, args.slice(1));
-    if (sub === 'add') return addCoords(message, args.slice(1));
-    if (sub === 'delete' || sub === 'remove') return deleteCoords(message, args.slice(1));
+  async execute(context, args) {
+    const isInteraction = !!context.isChatInputCommand?.();
+    let sub;
+    
+    if (isInteraction) {
+      sub = context.options.getSubcommand();
+      await context.deferReply();
+    } else {
+      sub = args[0]?.toLowerCase();
+    }
 
-    message.reply(
-      '❓ Usage:\n' +
+    if (!sub || sub === 'list') return listCoords(context, isInteraction ? [] : args.slice(1));
+    if (sub === 'add') return addCoords(context, isInteraction ? [] : args.slice(1));
+    if (sub === 'delete' || sub === 'remove') return deleteCoords(context, isInteraction ? [] : args.slice(1));
+
+    const helpMsg = '❓ Usage:\n' +
       '`*coords list [server]`\n' +
       '`*coords add <n> <x> <y> <z> [dim] [server]`\n' +
-      '`*coords delete <n> [server]`'
-    );
+      '`*coords delete <n> [server]`';
+    
+    if (isInteraction) return context.editReply(helpMsg);
+    return context.reply(helpMsg);
   }
 };
 
-async function listCoords(message, args) {
-  const server = await resolveServer(message, args, 0);
+async function listCoords(context, args) {
+  const isInteraction = !!context.isChatInputCommand?.();
+  const serverArg = isInteraction ? context.options.getString('server') : args[0];
+  const server = await resolveServer(context, serverArg ? [serverArg] : [], 0);
   if (!server) return;
 
-  const db = await getDb();
-  const result = db.exec(
-    `SELECT * FROM coords WHERE guild_id = ? AND server_name = ? ORDER BY dimension, name`,
-    [message.guild.id, server.server_name]
-  );
+  const db = getDb();
+  const rows = db.prepare(
+    `SELECT * FROM coords WHERE guild_id = ? AND server_name = ? ORDER BY dimension, name`
+  ).all(context.guild.id, server.server_name);
 
-  if (!result.length || !result[0].values.length)
-    return message.reply(`📭 No coords saved for **${server.server_name}** yet. Use \`*coords add\` to add one!`);
-
-  const cols = result[0].columns;
-  const rows = result[0].values.map(v => Object.fromEntries(cols.map((c, i) => [c, v[i]])));
+  if (!rows.length) {
+    const msg = `📭 No coords saved for **${server.server_name}** yet. Use \`*coords add\` to add one!`;
+    return isInteraction ? context.editReply(msg) : context.reply(msg);
+  }
 
   const grouped = {};
   for (const row of rows) {
@@ -57,88 +98,132 @@ async function listCoords(message, args) {
     embed.addFields({ name: `${emoji} ${dim.charAt(0).toUpperCase() + dim.slice(1)}`, value: lines.join('\n') });
   }
 
-  message.channel.send({ embeds: [embed] });
+  if (isInteraction) {
+    await context.editReply({ embeds: [embed] });
+  } else {
+    context.channel.send({ embeds: [embed] });
+  }
 }
 
-async function addCoords(message, args) {
-  // *coords add <n> <x> <y> <z> [dim] [server]
-  if (args.length < 4)
-    return message.reply('❌ Usage: `*coords add <n> <x> <y> <z> [overworld/nether/end] [server]`');
+async function addCoords(context, args) {
+  const isInteraction = !!context.isChatInputCommand?.();
+  let name, x, y, z, dimension, serverName;
 
-  const [name, rawX, rawY, rawZ] = args;
-  const x = parseInt(rawX), y = parseInt(rawY), z = parseInt(rawZ);
+  if (isInteraction) {
+    name = context.options.getString('name');
+    x = context.options.getInteger('x');
+    y = context.options.getInteger('y');
+    z = context.options.getInteger('z');
+    dimension = context.options.getString('dimension') || 'overworld';
+    serverName = context.options.getString('server');
+  } else {
+    if (args.length < 4)
+      return context.reply('❌ Usage: `*coords add <n> <x> <y> <z> [overworld/nether/end] [server]`');
 
-  if (isNaN(x) || isNaN(y) || isNaN(z))
-    return message.reply('❌ Coordinates must be numbers. Example: `*coords add Base 100 64 -200`');
+    [name, x, y, z] = args;
+    x = parseInt(x);
+    y = parseInt(y);
+    z = parseInt(z);
 
-  // 5th arg: dimension or server name
-  // 6th arg: server name (if dim was provided)
-  let dimension = 'overworld';
-  let serverArg = null;
+    if (isNaN(x) || isNaN(y) || isNaN(z))
+      return context.reply('❌ Coordinates must be numbers. Example: `*coords add Base 100 64 -200`');
 
-  if (args[4]) {
-    if (DIMENSIONS.includes(args[4].toLowerCase())) {
-      dimension = args[4].toLowerCase();
-      serverArg = args[5] || null;
-    } else {
-      serverArg = args[4];
+    dimension = 'overworld';
+    let serverPart = null;
+
+    if (args[4]) {
+      if (DIMENSIONS.includes(args[4].toLowerCase())) {
+        dimension = args[4].toLowerCase();
+        serverPart = args[5] || null;
+      } else {
+        serverPart = args[4];
+      }
     }
+    serverName = serverPart;
   }
 
-  const server = await resolveServer(message, serverArg ? [serverArg] : [], 0);
+  const server = await resolveServer(context, serverName ? [serverName] : [], 0);
   if (!server) return;
 
-  const db = await getDb();
-  const existing = db.exec(
-    `SELECT id FROM coords WHERE guild_id = ? AND server_name = ? AND LOWER(name) = LOWER(?)`,
-    [message.guild.id, server.server_name, name]
-  );
-  if (existing.length && existing[0].values.length)
-    return message.reply(`❌ A coord named **${name}** already exists on **${server.server_name}**.`);
+  const db = getDb();
+  const existing = db.prepare(
+    `SELECT id FROM coords WHERE guild_id = ? AND server_name = ? AND LOWER(name) = LOWER(?)`
+  ).get(context.guild.id, server.server_name, name);
 
-  db.run(
+  if (existing) {
+    const msg = `❌ A coord named **${name}** already exists on **${server.server_name}**.`;
+    return isInteraction ? context.editReply(msg) : context.reply(msg);
+  }
+
+  const author = isInteraction ? context.user : context.author;
+
+  db.prepare(
     `INSERT INTO coords (guild_id, server_name, name, x, y, z, dimension, added_by, added_by_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [message.guild.id, server.server_name, name, x, y, z, dimension, message.author.username, message.author.id]
-  );
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(context.guild.id, server.server_name, name, x, y, z, dimension, author.username, author.id);
   save();
 
   const emoji = DIMENSION_EMOJI[dimension];
-  message.reply(`✅ Saved **${name}** at \`${x}, ${y}, ${z}\` in ${emoji} ${dimension} on **${server.server_name}**!`);
+  const successMsg = `✅ Saved **${name}** at \`${x}, ${y}, ${z}\` in ${emoji} ${dimension} on **${server.server_name}**!`;
+  return isInteraction ? context.editReply(successMsg) : context.reply(successMsg);
 }
 
-async function deleteCoords(message, args) {
-  if (!args[0]) return message.reply('❌ Usage: `*coords delete <n> [server]`');
+async function deleteCoords(context, args) {
+  const isInteraction = !!context.isChatInputCommand?.();
+  let name, serverName;
 
-  const serverArg = args[args.length - 1];
-  const server = await resolveServer(message, [serverArg], 0);
+  if (isInteraction) {
+    name = context.options.getString('name');
+    serverName = context.options.getString('server');
+  } else {
+    if (!args[0]) return context.reply('❌ Usage: `*coords delete <n> [server]`');
+    const serverArg = args[args.length - 1];
+    // Need to check if serverArg is actually a server name or part of the name
+    // Original code: const server = await resolveServer(message, [serverArg], 0);
+    // This implies it tries to resolve it from the last arg.
+    serverName = serverArg;
+    name = args.slice(0, -1).join(' ') || args[0];
+  }
+
+  const server = await resolveServer(context, serverName ? [serverName] : [], 0);
   if (!server) return;
 
-  const name = args.slice(0, -1).join(' ') || args[0];
-  const db = await getDb();
+  // If not interaction, we might have mis-identified name and server if server wasn't provided
+  // But resolveServer handles the case where it might be null.
+  // Wait, if server wasn't provided, serverArg would be the name.
+  // Original code: const name = args.slice(0, -1).join(' ') || args[0];
+  // If args.length is 1, name = args[0]. serverArg = args[0].
+  // If resolveServer(message, [args[0]], 0) finds a server, then name is ""? 
+  // No, `args.slice(0, -1).join(' ') || args[0]` means if slice is empty, use args[0].
+  
+  const db = getDb();
+  const actualName = isInteraction ? name : (args.length > 1 ? args.slice(0, -1).join(' ') : args[0]);
 
-  const result = db.exec(
-    `SELECT * FROM coords WHERE guild_id = ? AND server_name = ? AND LOWER(name) = LOWER(?)`,
-    [message.guild.id, server.server_name, name]
-  );
+  const row = db.prepare(
+    `SELECT * FROM coords WHERE guild_id = ? AND server_name = ? AND LOWER(name) = LOWER(?)`
+  ).get(context.guild.id, server.server_name, actualName);
 
-  if (!result.length || !result[0].values.length)
-    return message.reply(`❌ No coord named **${name}** found on **${server.server_name}**.`);
+  if (!row) {
+    const msg = `❌ No coord named **${actualName}** found on **${server.server_name}**.`;
+    return isInteraction ? context.editReply(msg) : context.reply(msg);
+  }
 
-  const cols = result[0].columns;
-  const row = Object.fromEntries(cols.map((c, i) => [c, result[0].values[0][i]]));
+  const member = isInteraction ? context.member : context.member;
+  const author = isInteraction ? context.user : context.author;
 
-  const isAdmin = message.member.permissions.has('Administrator');
-  const isOwner = row.added_by_id === message.author.id;
+  const isManager = await canManageSMP(member, server.server_name);
+  const isOwner = row.added_by_id === author.id;
 
-  if (!isAdmin && !isOwner)
-    return message.reply(`❌ You can only delete coords you added. **${name}** was added by ${row.added_by}.`);
+  if (!isManager && !isOwner) {
+    const msg = `❌ You can only delete coords you added. **${actualName}** was added by ${row.added_by}.`;
+    return isInteraction ? context.editReply(msg) : context.reply(msg);
+  }
 
-  db.run(
-    `DELETE FROM coords WHERE guild_id = ? AND server_name = ? AND LOWER(name) = LOWER(?)`,
-    [message.guild.id, server.server_name, name]
-  );
+  db.prepare(
+    `DELETE FROM coords WHERE guild_id = ? AND server_name = ? AND LOWER(name) = LOWER(?)`
+  ).run(context.guild.id, server.server_name, actualName);
   save();
 
-  message.reply(`🗑️ Deleted **${name}** from **${server.server_name}**.`);
+  const successMsg = `🗑️ Deleted **${actualName}** from **${server.server_name}**.`;
+  return isInteraction ? context.editReply(successMsg) : context.reply(successMsg);
 }

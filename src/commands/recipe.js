@@ -1,4 +1,4 @@
-const { EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const recipes = require('../data/recipes.json');
 
 function toId(q) { return q.toLowerCase().trim().replace(/\s+/g, '_'); }
@@ -14,7 +14,6 @@ function findMatch(query) {
   if (KEYS.includes(id)) return { key: id, exact: true };
 
   // 2. Bidirectional: all query words in key AND all significant key words in query
-  // This prevents "smooth stone" matching "smooth_sandstone" (sandstone ≠ stone)
   const strict = KEYS.filter(k => {
     const kWords = k.split('_').filter(w => w.length > 2);
     return queryWords.every(w => k.includes(w)) && kWords.every(w => id.includes(w));
@@ -105,22 +104,37 @@ module.exports = {
   name: 'recipe',
   aliases: ['craft', 'r'],
   description: 'Show crafting recipe and info for any Minecraft item',
+  data: new SlashCommandBuilder()
+    .setName('recipe')
+    .setDescription('Show crafting recipe and info for any Minecraft item')
+    .addStringOption(option =>
+      option.setName('item')
+        .setDescription('The item name')
+        .setRequired(true)),
 
-  async execute(message, args) {
-    if (!args.length)
-      return message.reply('❌ Usage: `*recipe <item>`\nExample: `*recipe diamond sword`');
+  async execute(context, args) {
+    const isInteraction = !!context.isChatInputCommand?.();
+    const query = isInteraction ? context.options.getString('item') : args.join(' ');
 
-    const query = args.join(' ');
-    const itemId = toId(query);
-    const checking = await message.channel.send(`🔍 Looking up **${query}**...`);
+    if (!query) {
+      const msg = '❌ Usage: `*recipe <item>`\nExample: `*recipe diamond sword`';
+      return isInteraction ? context.reply({ content: msg, ephemeral: true }) : context.reply(msg);
+    }
+
+    if (isInteraction) await context.deferReply();
+
+    let checking;
+    if (!isInteraction) {
+      checking = await context.channel.send(`🔍 Looking up **${query}**...`);
+    }
 
     try {
       const match = findMatch(query);
       const matchedId = match?.key || null;
       const recipe = matchedId !== null ? recipes[matchedId] : undefined;
+      const itemId = toId(query);
       const displayName = toDisplay(matchedId || itemId);
       const wikiInfo = await fetchWikiPage(matchedId || itemId);
-      await checking.delete();
 
       if (recipe && matchedId) {
         const embed = new EmbedBuilder().setTitle(`🔨 ${displayName}`).setColor(0x8B5E3C);
@@ -131,7 +145,13 @@ module.exports = {
         if (wikiInfo?.usage) embed.addFields({ name: '⚒️ Usage', value: wikiInfo.usage });
         if (wikiInfo?.url) embed.addFields({ name: '📖 Wiki', value: `[Read more](${wikiInfo.url})` });
         if (!match.exact) embed.setFooter({ text: `Showing results for "${displayName}" — did you mean this?` });
-        return message.channel.send({ embeds: [embed] });
+        
+        if (isInteraction) {
+          return await context.editReply({ content: null, embeds: [embed] });
+        } else {
+          if (checking) await checking.delete();
+          return context.channel.send({ embeds: [embed] });
+        }
       }
 
       if (recipe === null && matchedId) {
@@ -141,7 +161,13 @@ module.exports = {
         embed.addFields({ name: '🗺️ How to obtain', value: 'Cannot be crafted in a crafting table. Obtained through mining, mob drops, chest loot, smelting, trading, or other in-game means.' });
         if (wikiInfo?.usage) embed.addFields({ name: '⚒️ Usage', value: wikiInfo.usage });
         if (wikiInfo?.url) embed.addFields({ name: '📖 Wiki', value: `[Read more](${wikiInfo.url})` });
-        return message.channel.send({ embeds: [embed] });
+        
+        if (isInteraction) {
+          return await context.editReply({ content: null, embeds: [embed] });
+        } else {
+          if (checking) await checking.delete();
+          return context.channel.send({ embeds: [embed] });
+        }
       }
 
       if (wikiInfo) {
@@ -153,17 +179,35 @@ module.exports = {
           { name: '📖 Wiki', value: `[Read more](${wikiInfo.url})` },
           { name: '⚠️ Note', value: "Recipe data for this item isn't in my database yet. Check the wiki link above for crafting info." }
         );
-        return message.channel.send({ embeds: [embed] });
+        
+        if (isInteraction) {
+          return await context.editReply({ content: null, embeds: [embed] });
+        } else {
+          if (checking) await checking.delete();
+          return context.channel.send({ embeds: [embed] });
+        }
       }
 
       const suggestions = getSuggestions(query);
       const hint = suggestions.length ? `\n\nDid you mean:\n${suggestions.map(s => `• \`*recipe ${s}\``).join('\n')}` : '';
-      message.reply(`❓ Couldn't find **${query}** in Minecraft.${hint}`);
+      const noFound = `❓ Couldn't find **${query}** in Minecraft.${hint}`;
+      
+      if (isInteraction) {
+        await context.editReply(noFound);
+      } else {
+        if (checking) await checking.delete();
+        context.reply(noFound);
+      }
 
     } catch (err) {
-      try { await checking.delete(); } catch {}
       console.error('Recipe error:', err);
-      message.reply('⚠️ Something went wrong. Try again later.');
+      const errMsg = '⚠️ Something went wrong. Try again later.';
+      if (isInteraction) {
+        await context.editReply(errMsg);
+      } else {
+        if (checking) try { await checking.delete(); } catch {}
+        context.reply(errMsg);
+      }
     }
   }
 };

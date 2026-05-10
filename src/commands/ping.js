@@ -1,4 +1,4 @@
-const { EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { resolveServer } = require('../utils/resolveServer');
 const { rconCommand } = require('../utils/rcon');
 const mcping = require('mcping-js');
@@ -84,15 +84,32 @@ module.exports = {
   name: 'ping',
   aliases: ['network', 'latency'],
   description: 'Show detailed network stats for the server',
+  data: new SlashCommandBuilder()
+    .setName('ping')
+    .setDescription('Show detailed network stats for the server')
+    .addStringOption(option =>
+      option.setName('server')
+        .setDescription('The server name (optional)')
+        .setRequired(false)),
 
-  async execute(message, args) {
-    const server = await resolveServer(message, args, 0);
+  async execute(context, args) {
+    const isInteraction = !!context.isChatInputCommand?.();
+    const finalArgs = isInteraction ? [context.options.getString('server')] : args;
+
+    if (isInteraction) await context.deferReply();
+
+    const server = await resolveServer(context, finalArgs, 0);
     if (!server) return;
 
-    if (!server.java_ip && !server.bedrock_ip)
-      return message.reply('❌ No IP configured. Run `*setup` first.');
+    if (!server.java_ip && !server.bedrock_ip) {
+      const msg = '❌ No IP configured. Run `*setup` first.';
+      return isInteraction ? context.editReply(msg) : context.reply(msg);
+    }
 
-    const checking = await message.channel.send(`📡 Pinging **${server.server_name}** (${PING_COUNT}x, please wait)...`);
+    let checking;
+    if (!isInteraction) {
+      checking = await context.channel.send(`📡 Pinging **${server.server_name}** (${PING_COUNT}x, please wait)...`);
+    }
 
     // ── Java: sequential pings ──
     let javaStats = null;
@@ -127,8 +144,6 @@ module.exports = {
         if (match) tps = parseFloat(match[0]);
       } catch { /* RCON unavailable, skip */ }
     }
-
-    await checking.delete();
 
     const quality = getQuality(javaStats?.avg ?? bedrockStats?.avg ?? null);
 
@@ -206,6 +221,12 @@ module.exports = {
     }
 
     embed.setFooter({ text: `${PING_COUNT} packets • 800ms between each • Jitter = ping variance` });
-    message.channel.send({ embeds: [embed] });
+    
+    if (isInteraction) {
+      await context.editReply({ content: null, embeds: [embed] });
+    } else {
+      await checking.delete();
+      context.channel.send({ embeds: [embed] });
+    }
   }
 };

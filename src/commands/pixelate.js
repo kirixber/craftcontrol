@@ -1,4 +1,4 @@
-const { AttachmentBuilder } = require('discord.js');
+const { AttachmentBuilder, SlashCommandBuilder } = require('discord.js');
 const Jimp = require('jimp');
 
 const BLOCK_SIZE = 4; // each "pixel" becomes a 16x16 block
@@ -8,24 +8,56 @@ module.exports = {
   name: 'pixelate',
   aliases: ['pix', 'pixel'],
   description: 'Convert any image to a Minecraft-style pixelated version',
+  data: new SlashCommandBuilder()
+    .setName('pixelate')
+    .setDescription('Convert any image to a Minecraft-style pixelated version')
+    .addAttachmentOption(option =>
+      option.setName('image')
+        .setDescription('The image to pixelate')
+        .setRequired(false))
+    .addStringOption(option =>
+      option.setName('url')
+        .setDescription('The URL of the image to pixelate')
+        .setRequired(false)),
 
-  async execute(message, args) {
-    // Get image — from attachment or URL arg
+  async execute(context, args) {
+    const isInteraction = !!context.isChatInputCommand?.();
     let imageUrl = null;
 
-    if (message.attachments.size > 0) {
-      const attachment = message.attachments.first();
-      if (!attachment.contentType?.startsWith('image/')) {
-        return message.reply('❌ Please attach a valid image (JPG/PNG).');
+    if (isInteraction) {
+      const attachment = context.options.getAttachment('image');
+      const url = context.options.getString('url');
+
+      if (attachment) {
+        if (!attachment.contentType?.startsWith('image/')) {
+          return context.reply({ content: '❌ Please attach a valid image (JPG/PNG).', ephemeral: true });
+        }
+        imageUrl = attachment.url;
+      } else if (url) {
+        imageUrl = url;
+      } else {
+        return context.reply({ content: '❌ Please provide an image attachment or a URL.', ephemeral: true });
       }
-      imageUrl = attachment.url;
-    } else if (args[0]) {
-      imageUrl = args[0];
+      await context.deferReply();
     } else {
-      return message.reply('❌ Usage:\n`*pix <image url>` — pixelate from URL\nor attach an image with the command.');
+      // Get image — from attachment or URL arg
+      if (context.attachments.size > 0) {
+        const attachment = context.attachments.first();
+        if (!attachment.contentType?.startsWith('image/')) {
+          return context.reply('❌ Please attach a valid image (JPG/PNG).');
+        }
+        imageUrl = attachment.url;
+      } else if (args[0]) {
+        imageUrl = args[0];
+      } else {
+        return context.reply('❌ Usage:\n`*pix <image url>` — pixelate from URL\nor attach an image with the command.');
+      }
     }
 
-    const processing = await message.channel.send('🎨 Pixelating your image...');
+    let processing;
+    if (!isInteraction) {
+      processing = await context.channel.send('🎨 Pixelating your image...');
+    }
 
     try {
       const img = await Jimp.read(imageUrl);
@@ -57,21 +89,36 @@ module.exports = {
       img.posterize(8);
 
       const buffer = await img.getBufferAsync(Jimp.MIME_PNG);
-      const attachment = new AttachmentBuilder(buffer, { name: 'pixelated.png' });
+      const outAttachment = new AttachmentBuilder(buffer, { name: 'pixelated.png' });
 
-      await processing.delete();
-      message.reply({
-        content: '⛏️ Here\'s your Minecraft-style pixelated image!',
-        files: [attachment]
-      });
+      if (isInteraction) {
+        await context.editReply({
+          content: '⛏️ Here\'s your Minecraft-style pixelated image!',
+          files: [outAttachment]
+        });
+      } else {
+        await processing.delete();
+        context.reply({
+          content: '⛏️ Here\'s your Minecraft-style pixelated image!',
+          files: [outAttachment]
+        });
+      }
 
     } catch (err) {
-      try { await processing.delete(); } catch {}
-      console.error('Pixelate error:', err);
-      if (err.message?.includes('Could not find MIME')) {
-        return message.reply('❌ Couldn\'t read that image. Make sure it\'s a valid JPG or PNG URL.');
+      if (!isInteraction && processing) {
+        try { await processing.delete(); } catch {}
       }
-      message.reply('⚠️ Something went wrong processing the image. Try again with a different image.');
+      console.error('Pixelate error:', err);
+      const errorMsg = err.message?.includes('Could not find MIME') 
+        ? '❌ Couldn\'t read that image. Make sure it\'s a valid JPG or PNG URL.'
+        : '⚠️ Something went wrong processing the image. Try again with a different image.';
+      
+      if (isInteraction) {
+        if (context.deferred) await context.editReply(errorMsg);
+        else await context.reply({ content: errorMsg, ephemeral: true });
+      } else {
+        context.reply(errorMsg);
+      }
     }
   }
 };

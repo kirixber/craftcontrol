@@ -1,33 +1,60 @@
+const { SlashCommandBuilder } = require('discord.js');
 const { rconCommand } = require('../../utils/rcon');
 const { resolveServer } = require('../../utils/resolveServer');
-
-const COMMON_RULES = ['keepInventory','doFireTick','mobGriefing','doDaylightCycle','doWeatherCycle','doMobSpawning','announceAdvancements','naturalRegeneration','doImmediateRespawn','pvp'];
+const { canManageSMP } = require('../../utils/permissions');
 
 module.exports = {
   name: 'gamerule',
   aliases: ['gr'],
   description: 'Get or set a gamerule (admin only)',
+  data: new SlashCommandBuilder()
+    .setName('gamerule')
+    .setDescription('Get or set a gamerule (admin only)')
+    .addStringOption(option => option.setName('rule').setDescription('The gamerule to get or set').setRequired(true))
+    .addStringOption(option => option.setName('value').setDescription('The value to set (optional)'))
+    .addStringOption(option => option.setName('server').setDescription('The server to run the command on')),
 
-  async execute(message, args) {
-    if (!message.member.permissions.has('Administrator'))
-      return message.reply('❌ You need Administrator permissions.');
+  async execute(context, args) {
+    const isInteraction = context.isChatInputCommand?.();
+    if (isInteraction) await context.deferReply();
 
-    if (!args[0])
-      return message.reply('❌ Usage: `*gr <rule> [value] [server]`\n**Common rules:** `' + COMMON_RULES.join('`, `') + '`');
+    const rule = isInteraction ? context.options.getString('rule') : args[0];
+    const value = isInteraction ? context.options.getString('value') : args[1];
+    
+    if (!isInteraction && !rule) {
+      const COMMON_RULES = ['keepInventory','doFireTick','mobGriefing','doDaylightCycle','doWeatherCycle','doMobSpawning','announceAdvancements','naturalRegeneration','doImmediateRespawn','pvp'];
+      return context.reply('❌ Usage: `*gr <rule> [value] [server]`\n**Common rules:** `' + COMMON_RULES.join('`, `') + '`');
+    }
 
-    // last arg might be server name if 3 args given and 3rd doesn't look like true/false/number
-    const serverArg = args[2] && isNaN(args[2]) && !['true','false'].includes(args[2].toLowerCase()) ? args[2] : null;
-    const server = await resolveServer(message, serverArg ? [serverArg] : [], 0);
+    let serverArg;
+    if (isInteraction) {
+      serverArg = context.options.getString('server');
+    } else {
+      serverArg = args[2] && isNaN(args[2]) && !['true','false'].includes(args[2].toLowerCase()) ? args[2] : null;
+    }
+
+    const server = await resolveServer(context, serverArg ? [serverArg] : [], 0);
     if (!server) return;
-    if (!server.rcon_host) return message.reply('❌ RCON not configured for this server. Re-run `*setup`.');
 
-    const command = args.length === 1 ? `gamerule ${args[0]}` : `gamerule ${args[0]} ${args[1]}`;
+    if (!await canManageSMP(context.member, server.server_name)) {
+      const msg = '❌ You need SMP Manager permissions.';
+      return isInteraction ? context.editReply(msg) : context.reply(msg);
+    }
+
+    if (!server.rcon_host) {
+      const msg = '❌ RCON not configured for this server. Re-run `*setup`.';
+      return isInteraction ? context.editReply(msg) : context.reply(msg);
+    }
+
+    const command = value ? `gamerule ${rule} ${value}` : `gamerule ${rule}`;
 
     try {
       const res = await rconCommand(server, command);
-      message.reply(`✅ \`${res.replace(/§./g, '')}\``);
+      const replyMsg = `✅ \`${res.replace(/§./g, '')}\``;
+      return isInteraction ? context.editReply(replyMsg) : context.reply(replyMsg);
     } catch {
-      message.reply('⚠️ Could not connect to server via RCON.');
+      const errorMsg = '⚠️ Could not connect to server via RCON.';
+      return isInteraction ? context.editReply(errorMsg) : context.reply(errorMsg);
     }
   }
 };

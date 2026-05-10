@@ -1,4 +1,4 @@
-const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
 
 const GUIDES = {
   aternos: {
@@ -13,7 +13,7 @@ const GUIDES = {
       '6. Find `rcon.port` → note the value (default `25575`)',
       '7. Click **Save**',
       '8. **Restart** your server',
-      '9. Run `*setup` in Discord and enter the details!',
+      '9. Run `*setup` or `/setup` in Discord and enter the details!',
     ],
     note: 'For RCON host, use the same IP as your Minecraft server.',
   },
@@ -27,7 +27,7 @@ const GUIDES = {
       '4. Find `enable-rcon` → set to `true`',
       '5. Find `rcon.password` → set a password',
       '6. Save and **restart** your server',
-      '7. Run `*setup` in Discord and enter the details!',
+      '7. Run `*setup` or `/setup` in Discord and enter the details!',
     ],
     note: 'Minehut may block external RCON connections — if it doesn\'t work, skip RCON in `*setup`.',
   },
@@ -40,7 +40,7 @@ const GUIDES = {
       '3. Find **Enable RCON** → set to `true`',
       '4. Set **RCON Password** to anything you want',
       '5. Save and **restart** your server from the panel',
-      '6. Run `*setup` in Discord!',
+      '6. Run `*setup` or `/setup` in Discord!',
     ],
     note: 'Use your server IP and port 25575 for RCON in `*setup`.',
   },
@@ -53,7 +53,7 @@ const GUIDES = {
       '3. Set `enable-rcon=true`',
       '4. Set `rcon.password=yourpassword`',
       '5. Save → go to **Startup** and restart',
-      '6. Run `*setup` in Discord!',
+      '6. Run `*setup` or `/setup` in Discord!',
     ],
     note: 'Use your server IP and port 25575 for RCON.',
   },
@@ -69,7 +69,7 @@ const GUIDES = {
       '   • `rcon.port=25575`',
       '4. Save the file',
       '5. **Restart** your server',
-      '6. Run `*setup` in Discord and enter your IP, port 25575, and password!',
+      '6. Run `*setup` or `/setup` in Discord and enter your IP, port 25575, and password!',
     ],
     note: 'This works for Pterodactyl, Crafty, AMP, and any panel with file access.',
   },
@@ -85,7 +85,7 @@ const GUIDES = {
       '3. Run: `bash rcon-setup.sh`',
       '4. Enter a password when prompted',
       '5. Restart your Minecraft server',
-      '6. Run `*setup` in Discord with the details it prints!',
+      '6. Run `*setup` or `/setup` in Discord with the details it prints!',
     ],
     note: 'The rcon-setup.sh script auto-edits server.properties for you.',
   },
@@ -95,8 +95,14 @@ module.exports = {
   name: 'rconguide',
   aliases: ['rcon', 'rconhelp'],
   description: 'Step-by-step RCON setup guide for your hosting panel',
+  data: new SlashCommandBuilder()
+    .setName('rconguide')
+    .setDescription('Step-by-step RCON setup guide for your hosting panel'),
 
-  async execute(message) {
+  async execute(context) {
+    const isInteraction = context.isChatInputCommand?.();
+    if (isInteraction) await context.deferReply();
+
     const row = new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId('rcon_host_select')
@@ -117,11 +123,18 @@ module.exports = {
       .setColor(0x5865F2)
       .setFooter({ text: 'You can skip RCON — basic features still work without it' });
 
-    const reply = await message.channel.send({ embeds: [prompt], components: [row] });
+    let reply;
+    if (isInteraction) {
+      reply = await context.editReply({ embeds: [prompt], components: [row] });
+    } else {
+      reply = await context.channel.send({ embeds: [prompt], components: [row] });
+    }
+
+    const userId = isInteraction ? context.user.id : context.author.id;
 
     // Listen for selection
     const collector = reply.createMessageComponentCollector({
-      filter: i => i.user.id === message.author.id,
+      filter: i => i.user.id === userId,
       time: 60000,
       max: 1,
     });
@@ -141,7 +154,11 @@ module.exports = {
 
     collector.on('end', (collected) => {
       if (collected.size === 0) {
-        reply.edit({ components: [] }).catch(() => {});
+        if (isInteraction) {
+          context.editReply({ components: [] }).catch(() => {});
+        } else {
+          reply.edit({ components: [] }).catch(() => {});
+        }
       }
     });
   }
