@@ -29,7 +29,7 @@
 ## 🔗 Links
 
 *   **Website:** [Landing Page](https://kirixber.github.io/craftcontrol/)
-*   **Vote us @top.gg:** [Craftcontrol - top.gg]([https://top.gg/bot/1490560537917128856])
+*   **Vote us @top.gg:** [Craftcontrol - top.gg](https://top.gg/bot/1490560537917128856)
 *   **Developer:** Created by [kirixber](https://github.com/kirixber)
 
 ---
